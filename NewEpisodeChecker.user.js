@@ -135,13 +135,15 @@
       const map = new Map();
       for (const m of media) {
         let lastEp = 0;
+        let timeUntilAiring = null;
         if (m.nextAiringEpisode) {
           // nextAiringEpisode.episode is the NEXT one — last released is episode - 1
           lastEp = m.nextAiringEpisode.episode - 1;
+          timeUntilAiring = m.nextAiringEpisode.timeUntilAiring; // seconds
         } else if (m.episodes) {
           lastEp = m.episodes;
         }
-        map.set(m.id, { lastEp, status: m.status });
+        map.set(m.id, { lastEp, status: m.status, timeUntilAiring });
       }
       return map;
     } catch (e) {
@@ -207,8 +209,21 @@
   // Inject badge
   // =========================
 
-  function injectBadge(subEl, newEps, lastEp) {
-    subEl.parentElement?.querySelector('.nec-badge')?.remove();
+  function formatCountdown(seconds) {
+    if (seconds <= 0) return null;
+        const d = Math.floor(seconds / 86400);
+    const h = Math.floor((seconds % 86400) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    if (d > 0) return `${d}d ${h}h ${m}m ${s}s`;
+    if (h > 0) return `${h}h ${m}m ${s}s`;
+    return `${m}m ${s}s`;
+
+  }
+
+  function injectBadge(subEl, newEps, lastEp, timeUntilAiring, status) {
+    subEl.closest('div.inner')?.querySelector('.nec-badge')?.remove();
+    subEl.closest('div.inner')?.querySelector('.nec-countdown')?.remove();
 
     const badge = document.createElement('span');
     badge.className = 'nec-badge';
@@ -233,6 +248,44 @@
       pointer-events: none;
     `;
     subEl.insertAdjacentElement('afterend', badge);
+
+    const finished = status === 'FINISHED' && !timeUntilAiring;
+    if (timeUntilAiring > 0 || finished) {
+      const countdown = document.createElement('span');
+      countdown.className = 'nec-countdown';
+      countdown.style.cssText = `
+        display: block;
+        margin-top: 2px;
+        font-size: 10px;
+        font-weight: 600;
+        color: ${finished ? 'rgba(150, 150, 150, 0.7)' : 'rgba(255, 200, 60, 0.85)'};
+        letter-spacing: 0.3px;
+        white-space: nowrap;
+        pointer-events: none;
+      `;
+
+      const infoEl = subEl.closest('div.info');
+      (infoEl ?? badge).insertAdjacentElement('afterend', countdown);
+
+      if (finished) {
+        countdown.textContent = 'Finished';
+        return;
+      }
+
+      let remaining = timeUntilAiring;
+      const tick = () => {
+        const text = formatCountdown(remaining);
+        if (!text) { countdown.textContent = 'Finished'; return; }
+        countdown.textContent = `Ep ${lastEp + 1} in ${text}`;
+        remaining--;
+      };
+      tick();
+
+      const timer = setInterval(() => {
+        if (!countdown.isConnected) { clearInterval(timer); return; }
+        tick();
+      }, 1000);
+    }
   }
 
   // =========================
@@ -274,7 +327,7 @@
     for (const { info } of cardData) {
       const data = aniData.get(info.alid);
       if (!data) continue;
-      injectBadge(info.subEl, data.lastEp - info.currentEp, data.lastEp);
+      injectBadge(info.subEl, data.lastEp - info.currentEp, data.lastEp, data.timeUntilAiring, data.status);
     }
     } catch (e) {
       console.warn('[NEC] processCards error:', e);
