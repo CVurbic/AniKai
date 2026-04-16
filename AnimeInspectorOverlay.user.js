@@ -703,6 +703,30 @@
     #ae-help-tip.ae-vis { display: block; }
     #ae-help-tip b { color: #fff; font-weight: 700; }
 
+    /* ── Tree context menu ── */
+    #ae-tree-ctx {
+      position: fixed;
+      z-index: 2147483647;
+      background: rgba(16,16,20,.97);
+      border: 1px solid rgba(255,255,255,.13);
+      border-radius: 8px;
+      padding: 4px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.6);
+      display: none;
+      min-width: 160px;
+    }
+    #ae-tree-ctx.ae-vis { display: block; }
+    .ae-ctx-item {
+      padding: 7px 12px;
+      font: 12px/1 system-ui, sans-serif;
+      color: rgba(255,255,255,.7);
+      border-radius: 5px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background .1s, color .1s;
+    }
+    .ae-ctx-item:hover { background: rgba(255,255,255,.08); color: #fff; }
+
     /* ── Resize grip ── */
     #ae-inspector-resize-grip {
       position: absolute;
@@ -903,11 +927,19 @@
   const toast = document.createElement('div');
   toast.id = 'ae-toast';
 
+  const treeCtx = document.createElement('div');
+  treeCtx.id = 'ae-tree-ctx';
+  treeCtx.innerHTML = `
+    <div class="ae-ctx-item" id="ae-ctx-copy-html">⎘ Copy outer HTML</div>
+    <div class="ae-ctx-item" id="ae-ctx-copy-styled">⎘ Copy HTML + styles</div>
+  `;
+
   document.documentElement.appendChild(btn);
   document.documentElement.appendChild(panel);
   document.documentElement.appendChild(highlight);
   document.documentElement.appendChild(helpTip);
   document.documentElement.appendChild(toast);
+  document.documentElement.appendChild(treeCtx);
 
   // =========================
   // Panel state persistence
@@ -1568,6 +1600,87 @@
     updatePanel(el);
     showToast('Selected from tree');
   }, true);
+
+  // Tree node right-click → context menu
+  let treeCtxTargetEl = null;
+
+  function hideTreeCtx() {
+    treeCtx.classList.remove('ae-vis');
+    treeCtxTargetEl = null;
+  }
+
+  panel.querySelector('#ae-tree')?.addEventListener('contextmenu', e => {
+    const node = e.target?.closest?.('[data-ae-node]');
+    if (!node) return;
+    e.preventDefault();
+    e.stopPropagation();
+    treeCtxTargetEl = treeIdToEl.get(node.getAttribute('data-ae-node'));
+    if (!treeCtxTargetEl) return;
+    treeCtx.style.left = e.clientX + 'px';
+    treeCtx.style.top  = e.clientY + 'px';
+    treeCtx.classList.add('ae-vis');
+    // Clamp to viewport
+    requestAnimationFrame(() => {
+      const r = treeCtx.getBoundingClientRect();
+      if (r.right  > window.innerWidth)  treeCtx.style.left = (e.clientX - r.width  + 4) + 'px';
+      if (r.bottom > window.innerHeight) treeCtx.style.top  = (e.clientY - r.height + 4) + 'px';
+    });
+  }, true);
+
+  treeCtx.querySelector('#ae-ctx-copy-html')?.addEventListener('click', async e => {
+    e.stopPropagation();
+    const target = treeCtxTargetEl;
+    hideTreeCtx();
+    if (!target) return;
+    const html = target.outerHTML;
+    const ok = await copyToClipboard(html);
+    showToast(ok ? '⎘ Outer HTML copied' : '❌ Copy failed');
+  }, true);
+
+  function cloneWithStyles(el) {
+    const clone = el.cloneNode(true);
+
+    // Pair every original element with its clone counterpart
+    const origEls  = [el,  ...[...el.querySelectorAll('*')]];
+    const cloneEls = [clone, ...[...clone.querySelectorAll('*')]];
+
+    for (let i = 0; i < origEls.length; i++) {
+      const orig = origEls[i];
+      const copy = cloneEls[i];
+      if (orig.nodeType !== 1) continue;
+
+      const cs = getComputedStyle(orig);
+      let styleStr = '';
+      for (let j = 0; j < cs.length; j++) {
+        const prop = cs[j];
+        const val  = cs.getPropertyValue(prop);
+        if (val) styleStr += `${prop}:${val};`;
+      }
+      copy.setAttribute('style', styleStr);
+    }
+
+    return clone.outerHTML;
+  }
+
+  treeCtx.querySelector('#ae-ctx-copy-styled')?.addEventListener('click', async e => {
+    e.stopPropagation();
+    const target = treeCtxTargetEl;
+    hideTreeCtx();
+    if (!target) return;
+    showToast('⏳ Computing styles…');
+    let html;
+    try { html = cloneWithStyles(target); }
+    catch (err) {
+      showToast('❌ Failed: ' + err.message);
+      return;
+    }
+    const ok = await copyToClipboard(html);
+    showToast(ok ? '⎘ HTML + styles copied' : '❌ Copy failed');
+  }, true);
+
+  document.addEventListener('click', e => { if (!e.target?.closest?.('#ae-tree-ctx')) hideTreeCtx(); }, true);
+  document.addEventListener('keydown',    e => { if (e.key === 'Escape') hideTreeCtx(); }, true);
+  document.addEventListener('scroll',     () => hideTreeCtx(), true);
 
   function setEnabled(on) {
     enabled = on;
